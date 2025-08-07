@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import './App.css';
+// Bạn cần tạo file CSS này hoặc xóa dòng import nếu không dùng.
+
 
 // URL webhook của bạn
 const N8N_WEBHOOK_URL = 'https://n8n.aipencil.ai/webhook/hsk_llm'; 
@@ -11,11 +12,23 @@ function App() {
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
 
+  /**
+   * Hàm đọc file và chuyển đổi sang chuỗi Base64.
+   * @param {File} file - File ảnh cần chuyển đổi.
+   * @returns {Promise<string>} - Một Promise sẽ resolve với chuỗi Base64.
+   */
+  const toBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (error) => reject(error);
+  });
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!input.trim() && imageFiles.length === 0) return;
 
-    // Tạo URL tạm thời cho ảnh để hiển thị ngay lập tức
+    // Tạo URL tạm thời cho ảnh để hiển thị ngay lập tức trên UI
     const imageObjectURLs = imageFiles.map(file => URL.createObjectURL(file));
 
     // Thêm tin nhắn của người dùng vào giao diện
@@ -24,60 +37,50 @@ function App() {
       { from: 'user', text: input, images: imageObjectURLs }
     ]);
 
-    // Xóa input và ảnh đã chọn
+    setLoading(true);
+    
+    // Xóa input và ảnh đã chọn khỏi UI ngay sau khi gửi
     setInput('');
     setImageFiles([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
 
-    setLoading(true);
-
-    // Chuẩn bị dữ liệu để gửi đi
-    const formData = new FormData();
-    formData.append('text', input);
-    imageFiles.forEach((file, index) => {
-      // Quan trọng: đặt tên key cho file, ví dụ 'image0', 'image1',...
-      formData.append(`image${index}`, file);
-    });
-
+    // --- LOGIC GỬI NHIỀU FILE BASE64 ---
     try {
+      // Chuyển đổi tất cả các file ảnh đã chọn thành chuỗi Base64
+      const imageBase64Strings = await Promise.all(imageFiles.map(toBase64));
+
+      // Chuẩn bị payload dạng JSON để gửi đi
+      const payload = {
+        text: input,
+        // Gửi đi một mảng các chuỗi base64
+        images_base64: imageBase64Strings,
+      };
+
+      // Gửi request JSON đến webhook
       const res = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       });
-
+      
       let botReply = 'Lỗi: Không nhận được phản hồi hợp lệ.';
-
-      // <-- THAY ĐỔI CHÍNH BẮT ĐẦU TỪ ĐÂY
       if (res.ok) {
-        // Kiểm tra xem n8n trả về JSON hay chỉ là text
-        const contentType = res.headers.get("content-type");
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-          const data = await res.json();
-          // Lấy nội dung từ key 'reply' hoặc 'message', hoặc bất kỳ key nào bạn định nghĩa trong n8n
-          botReply = data.reply || data.message || JSON.stringify(data);
-        } else {
-          // Nếu n8n trả về text thuần túy
-          botReply = await res.text();
-        }
+        const data = await res.json();
+        botReply = data.reply || JSON.stringify(data);
       } else {
         botReply = `Lỗi từ server: ${res.status} ${res.statusText}`;
       }
-      // <-- KẾT THÚC THAY ĐỔI CHÍNH
-
-      setMessages(prev => [
-        ...prev,
-        { from: 'bot', text: botReply }
-      ]);
+      setMessages(prev => [...prev, { from: 'bot', text: botReply }]);
 
     } catch (err) {
-      console.error("Fetch Error:", err);
-      setMessages(prev => [
-        ...prev,
-        { from: 'bot', text: 'Đã xảy ra lỗi kết nối. Vui lòng kiểm tra console.' }
-      ]);
+      console.error("Lỗi khi gửi hoặc xử lý request:", err);
+      setMessages(prev => [...prev, { from: 'bot', text: 'Đã xảy ra lỗi kết nối. Vui lòng kiểm tra console.' }]);
     }
+    // --- KẾT THÚC LOGIC GỬI ---
 
     setLoading(false);
   };
@@ -86,6 +89,7 @@ function App() {
     setImageFiles(Array.from(e.target.files));
   };
 
+  // Giao diện người dùng
   return (
     <div className="chat-container">
       <div className="chat-history">
@@ -114,13 +118,12 @@ function App() {
         <input
           type="file"
           accept="image/*"
-          multiple
+          multiple // Cho phép chọn nhiều file
           ref={fileInputRef}
           onChange={handleFileChange}
-          style={{ display: 'none' }} // Ẩn input file gốc
+          style={{ display: 'none' }}
           id="file-upload"
         />
-        {/* Nút để mở hộp thoại chọn file */}
         <label htmlFor="file-upload" className="file-upload-label">📎</label>
         <button type="submit" disabled={loading || (!input.trim() && imageFiles.length === 0)}>Gửi</button>
       </form>
